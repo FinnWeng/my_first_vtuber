@@ -41,15 +41,15 @@ class LLM_Engine:
                 "role": "system",
                 "content": "You are a helpful assistant that outputs in JSON.",
             },
-            {"role": "user", "content": "Who won the world series in 2020"},
+            {"role": "user", "content": message},
         ]
 
         vtb_response_format={
         "type": "json_object",
         "schema": {
             "type": "object",
-            "properties": {"team_name": {"type": "string"}},
-            "required": ["team_name"],
+            "chat_content": {"reponse": {"type": "string"}},
+            
         },
         }
 
@@ -63,7 +63,7 @@ class LLM_Engine:
         # pdb.set_trace()
         
 
-        response = None
+        
         response = output["choices"][0]["message"]["content"]
 
         return response
