@@ -8,15 +8,32 @@ from llama_cpp import Llama
 # print(output)
 
 class LLM_Engine:
-    def __init__(self, llm_model_path, ) -> None:
+    def __init__(self, llm_model_path, role = "system") -> None:
         self.llm = Llama(model_path = llm_model_path,
                          n_gpu_layers=-1,
+                         chat_format="llama-2",
+                        # n_ctx=2048, verbose=False,
                          )
+        self.role = role
     
     def inference(self, message):
-        output = self.llm(message, max_tokens=32, stop=["Q:", "\n"], echo=True)
+        
+        message_list = [
+          {"role": self.role, "content": "You are an assistant who perfectly describes images."},
+          {
+              "role": "user",
+            #   "content": message,
+              "content": message
+
+          }
+        ]
+        output = self.llm.create_chat_completion(messages = message_list)
         message_length = len(message)
-        # import pdb
-        # pdb.set_trace()
-        response = output["choices"][0]["text"][message_length:]
+        print(output)
+   
+        response = output["choices"][0]["message"]["content"]
+
+        # output = self.llm(message, max_tokens=32, stop=["Q:", "\n"], echo=True)
+        # response = output["choices"][0]["text"]
+
         return response
