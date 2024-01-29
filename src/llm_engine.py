@@ -16,6 +16,8 @@ from llama_cpp.llama_chat_format import _convert_completion_to_chat
 import json
 from typing import Any, Dict, Iterator, List, Optional, Tuple, Union, Protocol
 
+from src.memory import Hippocampus
+
 
 
 # def _get_system_message(
@@ -153,7 +155,7 @@ class My_Llama_Chat_Handler:
 
 
 class LLM_Engine:
-    def __init__(self, llm_model_path, use_own_handler = True) -> None:
+    def __init__(self, llm_model_path, use_own_handler = True, db_path = "./db/") -> None:
         if use_own_handler:
             chat_handler = My_Llama_Chat_Handler()
             self.llm = Llama(model_path = llm_model_path,
@@ -172,14 +174,28 @@ class LLM_Engine:
 
         # self.role = "system"
         self.short_term_memories = [""]
-        self.short_term_memories_max_size = 10
+        self.short_term_memories_max_size = 6
+
+        self.long_term_memory_slot_size = 6
+        self.long_term_memory_slot_count = 0
+        self.hippocampus = Hippocampus(db_path = db_path, db_name = "test") # long-term memory
     
-    def get_memories(self):
-        out = "<<Short-Term Momory Chounk Start>>"
+    def get_memories(self, message_input = None):
+        out = "<<Momory Chunk Start>>"
+        if message_input is not None:
+            long_term_memory = self.hippocampus.query_memory(message_input)
+            out = out + "<<long-term start>>"
+            out = out + long_term_memory
+            out = out + "<<long-term end>>"
+
+        out = out + "<<short-term start>>"
         for i, short_term_memory in enumerate(self.short_term_memories):
             this_dialogue = "{}. {}".format(i, short_term_memory) + ", "
             out = out + this_dialogue
-        out = out + "<<Short-Term Momory Chounk End>>"
+        out = out + "<<short-term end>>"
+        out = out + "<<Momory Chunk End>>"
+
+        
      
         return out
     
@@ -192,6 +208,14 @@ class LLM_Engine:
         self.short_term_memories.append(this_dialogue)
         if len(self.short_term_memories) > self.short_term_memories_max_size:
             self.short_term_memories.pop(0)
+    
+    def long_term_memory_append(self):
+        if self.long_term_memory_slot_count == self.long_term_memory_slot_size:
+            self.hippocampus.add_memory(self.get_memories())
+            self.long_term_memory_slot_count = 0
+        else:
+            self.long_term_memory_slot_count += 1
+
 
     
     def inference(self, message_input):
@@ -217,12 +241,13 @@ class LLM_Engine:
         message_list =[
             {
                 "role": "virtual_youtuber",
-                "content": "The short-term memory: " + self.get_memories(),
+                "content": "The short-term memory: " + self.get_memories(message_input),
                 
             },
             {"role": "human_creator", "content": message_input},
         ]
-        print(self.get_memories())
+        # print(self.get_memories())
+        print(message_list)
 
         # vtb_response_format={
         # "type": "json_object",
