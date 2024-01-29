@@ -20,9 +20,11 @@ class Hippocampus:
     def query_memory(self, msg):
         query_result = self.collection.query(query_texts=[msg],n_results=2,include=["documents"])["documents"][0]
         out = ""
+        
         for i, long_term_memory in enumerate(query_result):
             this_dialogue = "{}. {}".format(i, long_term_memory) + ", "
             out = out + this_dialogue
+       
         
         return out
         

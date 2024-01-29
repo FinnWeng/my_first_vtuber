@@ -210,6 +210,7 @@ class LLM_Engine:
             self.short_term_memories.pop(0)
     
     def long_term_memory_append(self):
+        # print("self.long_term_memory_slot_count:", self.long_term_memory_slot_count)
         if self.long_term_memory_slot_count == self.long_term_memory_slot_size:
             self.hippocampus.add_memory(self.get_memories())
             self.long_term_memory_slot_count = 0
@@ -247,7 +248,7 @@ class LLM_Engine:
             {"role": "human_creator", "content": message_input},
         ]
         # print(self.get_memories())
-        print(message_list)
+        # print(message_list)
 
         # vtb_response_format={
         # "type": "json_object",
@@ -272,6 +273,7 @@ class LLM_Engine:
         response = output["choices"][0]["message"]["content"]
 
         self.short_term_memory_append(message_input=message_input, response=response)
+        self.long_term_memory_append()
 
         
 
