@@ -18,14 +18,14 @@ from typing import Any, Dict, Iterator, List, Optional, Tuple, Union, Protocol
 
 
 
-def _get_system_message(
-    messages: List[llama_types.ChatCompletionRequestMessage],
-) -> str:
-    """Get the first system message."""
-    for message in messages:
-        if message["role"] == "system":
-            return message["content"] or ""
-    return ""
+# def _get_system_message(
+#     messages: List[llama_types.ChatCompletionRequestMessage],
+# ) -> str:
+#     """Get the first system message."""
+#     for message in messages:
+#         if message["role"] == "system":
+#             return message["content"] or ""
+#     return ""
 
 class My_Llama_Chat_Handler:
     _clip_free = None
@@ -74,24 +74,29 @@ class My_Llama_Chat_Handler:
         llama_types.CreateChatCompletionResponse,
         Iterator[llama_types.CreateChatCompletionStreamResponse],
     ]:
-        # assert (
-        #     llama.context_params.logits_all is True
-        # )  # BUG: logits_all=True is required for llava
-        # assert self.clip_ctx is not None
-        system_prompt = _get_system_message(messages)
-        # import pdb
-        # pdb.set_trace()
-        system_prompt = (
-            system_prompt
-            if system_prompt != ""
-            else "A chat between a curious human and an artificial intelligence assistant.  The assistant gives helpful, detailed, and polite answers to the human's questions."
-        )
-        user_role = "\nUSER:"
-        assistant_role = "\nASSISTANT:"
+
+
+        # system_prompt = _get_system_message(messages)
+        # system_prompt = (
+        #     system_prompt
+        #     if system_prompt != ""
+        #     else "A chat between a curious human and an artificial intelligence assistant.  The assistant gives helpful, detailed, and polite answers to the human's questions."
+        # )
+
+   
+        system_prompt = "A chat between a curious human_creator and an artificial intelligence virtual_youtuber."\
+            "The name of AI virtual_youtuber is Homo-chan."\
+            "She is not a assitant. And she prefer chatting with people rather than assisting others."\
+            "Homo-chan likes singing and dancing and chat with others."\
+                "The virtual_youtuber got short-term memory information to help her to response."
+        
+
+        user_role = "\nhuman_creator:"
+        assistant_role = "\nvirtual_youtuber:"
         llama.reset()
         llama.eval(llama.tokenize(system_prompt.encode("utf8"), add_bos=True))
         for message in messages:
-            if message["role"] == "user" and message["content"] is not None:
+            if message["role"] == "human_creator" and message["content"] is not None:
                 if isinstance(message["content"], str):
                     llama.eval(
                         llama.tokenize(
@@ -99,10 +104,10 @@ class My_Llama_Chat_Handler:
                             add_bos=False,
                         )
                     )
-            if message["role"] == "assistant" and message["content"] is not None:
+            if message["role"] == "virtual_youtuber" and message["content"] is not None:
                 llama.eval(
                     llama.tokenize(
-                        f"ASSISTANT: {message['content']}".encode("utf8"), add_bos=False
+                        f"Vtuber: {message['content']}".encode("utf8"), add_bos=False
                     )
                 )
                 assert llama.n_ctx() >= llama.n_tokens
@@ -148,24 +153,48 @@ class My_Llama_Chat_Handler:
 
 
 class LLM_Engine:
-    def __init__(self, llm_model_path, use_own_handler = False) -> None:
+    def __init__(self, llm_model_path, use_own_handler = True) -> None:
         if use_own_handler:
             chat_handler = My_Llama_Chat_Handler()
             self.llm = Llama(model_path = llm_model_path,
                             n_gpu_layers=-1,
                             chat_handler = chat_handler,
-                            # n_ctx=2048, verbose=False,
+                            n_ctx=4096, 
+                            # verbose=False,
                             )
         else:
             self.llm = Llama(model_path = llm_model_path,
                 n_gpu_layers=-1,
                 chat_format="chatml",
-                # n_ctx=2048, verbose=False,
+                n_ctx=4096, 
+                # verbose=False,
                 )
 
-        self.role = "system"
+        # self.role = "system"
+        self.short_term_memories = [""]
+        self.short_term_memories_max_size = 10
     
-    def inference(self, message):
+    def get_memories(self):
+        out = "<<Short-Term Momory Chounk Start>>"
+        for i, short_term_memory in enumerate(self.short_term_memories):
+            this_dialogue = "{}. {}".format(i, short_term_memory) + ", "
+            out = out + this_dialogue
+        out = out + "<<Short-Term Momory Chounk End>>"
+     
+        return out
+    
+    def save_dialogue(self, message, response):
+        dialogue = "Text1(human_creator):{}, Text2(virtual_youtuber):{}".format(message,response)
+        return dialogue
+
+    def short_term_memory_append(self, message_input, response):
+        this_dialogue = self.save_dialogue(message_input, response)
+        self.short_term_memories.append(this_dialogue)
+        if len(self.short_term_memories) > self.short_term_memories_max_size:
+            self.short_term_memories.pop(0)
+
+    
+    def inference(self, message_input):
         
         # message_list = [
         #   {"role": self.role, "content": "You are an assistant who perfectly describes images."},
@@ -187,32 +216,38 @@ class LLM_Engine:
 
         message_list =[
             {
-                "role": "system",
-                "content": "You are a helpful assistant that outputs in JSON.",
+                "role": "virtual_youtuber",
+                "content": "The short-term memory: " + self.get_memories(),
+                
             },
-            {"role": "user", "content": message},
+            {"role": "human_creator", "content": message_input},
         ]
+        print(self.get_memories())
 
-        vtb_response_format={
-        "type": "json_object",
-        "schema": {
-            "type": "object",
-            "chat_content": {"reponse": {"type": "string"}},
+        # vtb_response_format={
+        # "type": "json_object",
+        # "schema": {
+        #     "type": "object",
+        #     "chat_content": {"reponse": {"type": "string"}},
             
-        },
-        }
+        # },
+        # }
 
         output = self.llm.create_chat_completion(
             messages = message_list,
-            response_format = vtb_response_format,
+            # response_format = vtb_response_format,
             temperature=0.7,)
         
-        print(output)
+        # print(output)
         # import pdb
         # pdb.set_trace()
         
 
         
         response = output["choices"][0]["message"]["content"]
+
+        self.short_term_memory_append(message_input=message_input, response=response)
+
+        
 
         return response

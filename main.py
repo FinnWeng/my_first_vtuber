@@ -10,5 +10,5 @@ if __name__ == "__main__":
 
     while True:
         message = input("enter some text: ")
-        response = llm_engine.inference(message=message)
+        response = llm_engine.inference(message_input=message)
         print(response + "\n")
