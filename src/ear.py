@@ -1,136 +1,139 @@
+#!/usr/bin/env python3
 
-import torch
-import torchaudio
+# prerequisites: as described in https://alphacephei.com/vosk/install and also python module `sounddevice` (simply run command `pip install sounddevice`)
+# Example usage using Dutch (nl) recognition model: `python test_microphone.py -m nl`
+# For more help run: `python test_microphone.py -h`
 
-
-# The data acquisition process will stop after this number of steps.
-# This eliminates the need of process synchronization and makes this
-# tutorial simple.
-NUM_ITER = 100
-
+import argparse
 import queue
+import sys
+import sounddevice as sd
+
+from vosk import Model, KaldiRecognizer, GpuInit
+import time
 
 
-def stream(q, format, src, segment_length, sample_rate):
-    from torchaudio.io import StreamReader
+def int_or_str(text):
+    """Helper function for argument parsing."""
+    try:
+        return int(text)
+    except ValueError:
+        return text
 
-    print("Building StreamReader...")
-    streamer = StreamReader(src, format=format)
-    streamer.add_basic_audio_stream(frames_per_chunk=segment_length, sample_rate=sample_rate)
+def callback(indata, frames, time, status):
+    """This is called (from a separate thread) for each audio block."""
+    if status:
+        print(status, file=sys.stderr)
+    q.put(bytes(indata))
 
-    print(streamer.get_src_stream_info(0))
-    print(streamer.get_out_stream_info(0))
-
-    print("Streaming...")
-    print()
-    stream_iterator = streamer.stream(timeout=-1, backoff=1.0)
-    for i in range(NUM_ITER):
+class Ear:
+    def __init__(self, samplerate = None, device = None, lang = "en-us") -> None:
         
-        (chunk,) = next(stream_iterator)
-        print("chunk_i: ",i)
-        q.put(chunk)
+        device_info = sd.query_devices(device, "input")
+        if samplerate is None:
+            self.samplerate = int(device_info["default_samplerate"])
+        else:
+            self.samplerate = samplerate
+        self.q = queue.Queue()
+        model = Model(lang=lang)
+        self.rec = KaldiRecognizer(model, self.samplerate)
+        self.blank_begin_time = None
+        self.blank_limit_time = None
+        self.tmp_text = ""
+    
+    def hear(self):
+
+
+        data = self.q.get()
+        if self.rec.AcceptWaveform(data):
+
+            output_text = self.rec.Result()
+            # print(output_text)
+            return output_text[14:-3]
+        else:
+
+            self.rec.PartialResult()
+            return ""
+                    
+    def hear_call_back(self,indata, frames, time, status):
+        """This is called (from a separate thread) for each audio block."""
+        if status:
+            print(status, file=sys.stderr)
+        self.q.put(bytes(indata))
 
 
 
-class Pipeline:
-    """Build inference pipeline from RNNTBundle.
-
-    Args:
-        bundle (torchaudio.pipelines.RNNTBundle): Bundle object
-        beam_width (int): Beam size of beam search decoder.
-    """
-
-    def __init__(self, bundle: torchaudio.pipelines.RNNTBundle, beam_width: int = 10):
-        self.bundle = bundle
-        self.feature_extractor = bundle.get_streaming_feature_extractor()
-        self.decoder = bundle.get_decoder()
-        self.token_processor = bundle.get_token_processor()
-
-        self.beam_width = beam_width
-
-        self.state = None
-        self.hypotheses = None
-
-    def infer(self, segment: torch.Tensor) -> str:
-        """Perform streaming inference"""
-        features, length = self.feature_extractor(segment)
-        self.hypotheses, self.state = self.decoder.infer(
-            features, length, self.beam_width, state=self.state, hypothesis=self.hypotheses
-        )
-        transcript = self.token_processor(self.hypotheses[0][0], lstrip=False)
-        return transcript
-
-
-class ContextCacher:
-    """Cache the end of input data and prepend the next input data with it.
-
-    Args:
-        segment_length (int): The size of main segment.
-            If the incoming segment is shorter, then the segment is padded.
-        context_length (int): The size of the context, cached and appended.
-    """
-
-    def __init__(self, segment_length: int, context_length: int):
-        self.segment_length = segment_length
-        self.context_length = context_length
-        self.context = torch.zeros([context_length])
-
-    def __call__(self, chunk: torch.Tensor):
-        if chunk.size(0) < self.segment_length:
-            chunk = torch.nn.functional.pad(chunk, (0, self.segment_length - chunk.size(0)))
-        chunk_with_context = torch.cat((self.context, chunk))
-        self.context = chunk[-self.context_length :]
-        return chunk_with_context
 
 
 
-def main(device, src, bundle):
-    print(torch.__version__)
-    print(torchaudio.__version__)
-
-    print("Building pipeline...")
-    pipeline = Pipeline(bundle)
-
-    sample_rate = bundle.sample_rate
-    segment_length = bundle.segment_length * bundle.hop_length
-    context_length = bundle.right_context_length * bundle.hop_length
-
-    print(f"Sample rate: {sample_rate}")
-    print(f"Main segment: {segment_length} frames ({segment_length / sample_rate} seconds)")
-    print(f"Right context: {context_length} frames ({context_length / sample_rate} seconds)")
-
-    cacher = ContextCacher(segment_length, context_length)
-
-    import time
-    @torch.inference_mode()
-    def infer():
-        for _ in range(NUM_ITER):
-            chunk = q.get()
-            segment = cacher(chunk[:, 0])
-            transcript = pipeline.infer(segment)
-            print("transcript: ", transcript)
-            print(transcript, end="\r", flush=True)
-
-    import torch.multiprocessing as mp
-
-    ctx = mp.get_context("spawn")
-   
-    # q = ctx.Queue()
-    # p = ctx.Process(target=stream, args=(q, device, src, segment_length, sample_rate))
-    # p.start()
-    # infer()
-    # p.join()
-
-    q = queue.Queue()
-    stream(q, device, src, segment_length, sample_rate)
-    infer()
 
 
 if __name__ == "__main__":
-    main(
-        # device="avfoundation",
-        # src=":1",
-        device="alsa",
-        src="hw:0",
-        bundle=torchaudio.pipelines.EMFORMER_RNNT_BASE_LIBRISPEECH,
-    )
+
+    q = queue.Queue()
+    GpuInit()
+
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument(
+        "-l", "--list-devices", action="store_true",
+        help="show list of audio devices and exit")
+    args, remaining = parser.parse_known_args()
+    if args.list_devices:
+        print(sd.query_devices())
+        parser.exit(0)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        parents=[parser])
+    parser.add_argument(
+        "-f", "--filename", type=str, metavar="FILENAME",
+        help="audio file to store recording to")
+    parser.add_argument(
+        "-d", "--device", type=int_or_str,
+        help="input device (numeric ID or substring)")
+    parser.add_argument(
+        "-r", "--samplerate", type=int, help="sampling rate")
+    parser.add_argument(
+        "-m", "--model", type=str, help="language model; e.g. en-us, fr, nl; default is en-us")
+    args = parser.parse_args(remaining)
+
+
+    if args.samplerate is None:
+        device_info = sd.query_devices(args.device, "input")
+        # soundfile expects an int, sounddevice provides a float:
+        args.samplerate = int(device_info["default_samplerate"])
+        
+    if args.model is None:
+        model = Model(lang="en-us")
+    else:
+        model = Model(lang=args.model)
+
+    if args.filename:
+        dump_fn = open(args.filename, "wb")
+    else:
+        dump_fn = None
+    # import pdb
+    # pdb.set_trace()
+    
+    rec = KaldiRecognizer(model, args.samplerate)
+
+    with sd.RawInputStream(samplerate=args.samplerate, blocksize = 8000, device=args.device,
+            dtype="int16", channels=1, callback=callback):
+        print("#" * 80)
+        print("Press Ctrl+C to stop the recording")
+        print("#" * 80)
+
+        
+        while True:
+            # data = q.get()
+            # rec.AcceptWaveform(data)# necessary
+            # print("not accept waveform",rec.PartialResult())
+
+            data = q.get()
+            if rec.AcceptWaveform(data):
+                print("accept waveform",rec.Result())
+            else:
+                print("not accept waveform",rec.PartialResult())
+            if dump_fn is not None:
+                dump_fn.write(data)
+ 
