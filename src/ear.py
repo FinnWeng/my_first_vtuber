@@ -130,6 +130,7 @@ if __name__ == "__main__":
             # print("not accept waveform",rec.PartialResult())
 
             data = q.get()
+            print(type(data))
             if rec.AcceptWaveform(data):
                 print("accept waveform",rec.Result())
             else:

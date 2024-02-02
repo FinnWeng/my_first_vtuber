@@ -9,7 +9,7 @@ import sounddevice as sd
 if __name__ == "__main__":
     llm_model_path = "/home/workspace/llava/llava-v1.5-7b/ggml-model-f16.gguf"
     llm_engine = LLM_Engine(llm_model_path, use_own_handler = True, db_path = "./db/")
-    ear = Ear()
+    ear = Ear(samplerate = 16000)
 
     # while True:
     #     message = input("enter some text: ")
