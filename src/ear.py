@@ -174,9 +174,9 @@ class HypothesisBuffer:
 
 class OnlineASRProcessor:
 
-    SAMPLING_RATE = 16000
+    # SAMPLING_RATE = 16000
 
-    def __init__(self, asr, tokenizer=None, buffer_trimming=("segment", 15), logfile=sys.stderr):
+    def __init__(self, asr, tokenizer=None, buffer_trimming=("segment", 15), logfile=sys.stderr, sampling_rate = 16000, stop_speeking_count_limit=3, maximum_audio_buffer_size=10):
         """asr: WhisperASR object
         tokenizer: sentence tokenizer object for the target language. Must have a method *split* that behaves like the one of MosesTokenizer. It can be None, if "segment" buffer trimming option is used, then tokenizer is not used at all.
         ("segment", 15)
@@ -186,10 +186,13 @@ class OnlineASRProcessor:
         self.asr = asr
         self.tokenizer = tokenizer
         self.logfile = logfile
-
+        self.SAMPLING_RATE = sampling_rate
         self.init()
 
         self.buffer_trimming_way, self.buffer_trimming_sec = buffer_trimming
+        self.stop_speeking_count = 0
+        self.stop_speeking_count_limit = stop_speeking_count_limit
+        self.maximum_audio_buffer_size = maximum_audio_buffer_size # in seconds
 
     def init(self):
         """run this when starting or restarting processing"""
@@ -235,14 +238,18 @@ class OnlineASRProcessor:
         """
 
         prompt, non_prompt = self.prompt()
-        print("PROMPT:", prompt, file=self.logfile)
-        print("CONTEXT:", non_prompt, file=self.logfile)
-        print(f"transcribing {len(self.audio_buffer)/self.SAMPLING_RATE:2.2f} seconds from {self.buffer_time_offset:2.2f}",file=self.logfile)
+        # print("PROMPT:", prompt, file=self.logfile)
+        # print("CONTEXT:", non_prompt, file=self.logfile)
+        # print(f"transcribing {len(self.audio_buffer)/self.SAMPLING_RATE:2.2f} seconds from {self.buffer_time_offset:2.2f}",file=self.logfile)
         res, info = self.asr.transcribe(self.audio_buffer, init_prompt=prompt)
 
         stop_speeking = False
         if (info[3] == self.latest_duration_after_vad) & (self.latest_duration_after_vad != 0.0):
-            stop_speeking = True
+            self.stop_speeking_count +=1
+            if self.stop_speeking_count > self.stop_speeking_count_limit:
+                self.stop_speeking_count = 0
+                stop_speeking = True 
+            
         else:
             self.latest_duration_after_vad = info[3]
 
@@ -280,8 +287,11 @@ class OnlineASRProcessor:
         #     #self.chunk_at(t)
 
         print(f"len of buffer now: {len(self.audio_buffer)/self.SAMPLING_RATE:2.2f}",file=self.logfile)
-        if len(self.audio_buffer)/self.SAMPLING_RATE > 30:
+        # print("self.audio_buffer:",self.audio_buffer.shape,file=self.logfile)
+        if len(self.audio_buffer)/self.SAMPLING_RATE > self.maximum_audio_buffer_size:
+            # self.audio_buffer = self.audio_buffer[-self.SAMPLING_RATE*self.maximum_audio_buffer_size:]
             stop_speeking = True
+
 
         return self.to_flush(o), stop_speeking
 
@@ -396,6 +406,64 @@ def add_shared_args(parser):
     parser.add_argument('--buffer_trimming_sec', type=float, default=15, help='Buffer trimming length threshold in seconds. If buffer length is longer, trimming sentence/segment is triggered.')
 
 ## main:
+    
+
+class Ear:
+    def __init__(self, sampling_rate = 16000) -> None:
+        size = 'large-v2'
+        language = "en"
+        model_cache_dir = None
+        model_dir = None
+        self.min_chunk = 0.333
+        self.stop_speeking_count_limit = 3
+        self.maximum_audio_buffer_size = 20 # in seconds
+        self.sampling_rate = sampling_rate
+        asr_cls = FasterWhisperASR
+        asr = asr_cls(modelsize=size, lan=language, cache_dir=model_cache_dir, model_dir=model_dir)
+        asr.use_vad()
+        self.online = OnlineASRProcessor(asr,tokenizer = None,logfile=sys.stderr,buffer_trimming=("segment", 15), \
+                                         sampling_rate = sampling_rate,stop_speeking_count_limit=self.stop_speeking_count_limit,\
+                                              maximum_audio_buffer_size=self.maximum_audio_buffer_size)
+        self.start = time.time()
+        self.end = 0.0
+
+        # load the audio into the LRU cache before we start the timer
+        a_short_clip = load_audio_chunk("./silence.wav",0,1)
+        asr.transcribe(a_short_clip)
+
+
+    def hear_call_back(self, indata, frames, time, status):
+        """This is called (from a separate thread) for each audio block."""
+        if status:
+            print(status, file=sys.stderr)
+        # q.put(bytes(indata))
+        # q.put(indata)
+        self.online.insert_audio_chunk(indata)
+
+    def process_iter(self):
+        now = time.time() - self.start
+        if now < self.end+self.min_chunk:
+            time.sleep(self.min_chunk+self.end-now)
+        self.end = time.time() - self.start
+        
+        try:
+            o, stop_speeking = self.online.process_iter()
+        except AssertionError:
+            print("assertion error",file=sys.stderr)
+            pass
+            
+        return o, stop_speeking
+    
+    def reset_processor(self):
+        self.online.init()
+
+
+    def output_heard(self):
+        output = self.online.prompt()
+        output = output[0] + output[1]
+        self.reset_processor()
+        return output 
+
 
 if __name__ == "__main__":
 
@@ -453,11 +521,11 @@ if __name__ == "__main__":
     online = OnlineASRProcessor(asr,tokenizer,logfile=logfile,buffer_trimming=(args.buffer_trimming, args.buffer_trimming_sec))
 
 
-    # load the audio into the LRU cache before we start the timer
-    a = load_audio_chunk(audio_path,0,1)
+    # # load the audio into the LRU cache before we start the timer
+    # a = load_audio_chunk(audio_path,0,1)
 
-    # warm up the ASR, because the very first transcribe takes much more time than the other
-    asr.transcribe(a)
+    # # warm up the ASR, because the very first transcribe takes much more time than the other
+    # asr.transcribe(a)
 
     beg = args.start_at
     # start = time.time()-beg
@@ -544,7 +612,11 @@ if __name__ == "__main__":
             # if end >= duration:
             #     break
             if stop_speeking:
-                print("online.commited:", [online.prompt()],file=logfile)
+                # print("online.commited:", [online.prompt()],file=logfile)
+                
+                output = online.prompt()
+                output = output[0] + output[1]
+                print("online.commited output: ", output,file=logfile)
                 online.init()
         now = None
 
