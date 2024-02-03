@@ -168,6 +168,9 @@ class HypothesisBuffer:
 
     def complete(self):
         return self.buffer
+    
+
+
 
 class OnlineASRProcessor:
 
@@ -198,6 +201,10 @@ class OnlineASRProcessor:
         self.last_chunked_at = 0
 
         self.silence_iters = 0
+
+
+        # my one
+        self.latest_duration_after_vad = 0
 
     def insert_audio_chunk(self, audio):
         self.audio_buffer = np.append(self.audio_buffer, audio)
@@ -233,6 +240,13 @@ class OnlineASRProcessor:
         print(f"transcribing {len(self.audio_buffer)/self.SAMPLING_RATE:2.2f} seconds from {self.buffer_time_offset:2.2f}",file=self.logfile)
         res, info = self.asr.transcribe(self.audio_buffer, init_prompt=prompt)
 
+        stop_speeking = False
+        if (info[3] == self.latest_duration_after_vad) & (self.latest_duration_after_vad != 0.0):
+            stop_speeking = True
+        else:
+            self.latest_duration_after_vad = info[3]
+
+
         # transform to [(beg,end,"word1"), ...]
         tsw = self.asr.ts_words(res)
 
@@ -240,15 +254,11 @@ class OnlineASRProcessor:
         o = self.transcript_buffer.flush()
         self.commited.extend(o)
         
-        print(">>>>COMPLETE NOW:",self.to_flush(o),file=self.logfile,flush=True)
-        print("info:",info,file=self.logfile,flush=True)
-        print("INCOMPLETE:",self.to_flush(self.transcript_buffer.complete()),file=self.logfile,flush=True)
+        # print(">>>>COMPLETE NOW:",self.to_flush(o),file=self.logfile,flush=True)
+        # print("INCOMPLETE:",self.to_flush(self.transcript_buffer.complete()),file=self.logfile,flush=True)
+        # print("info:",info[0],info[1],info[2],info[3],file=self.logfile,flush=True) # The info[3] is duration_after_vad. If two values of this value are the same, the speaker is stop talking.
 
         # there is a newly confirmed text
-
-        if o and self.buffer_trimming_way == "sentence":  # trim the completed sentences
-            if len(self.audio_buffer)/self.SAMPLING_RATE > self.buffer_trimming_sec:  # longer than this
-                self.chunk_completed_sentence()
 
         
         if self.buffer_trimming_way == "segment":
@@ -256,42 +266,33 @@ class OnlineASRProcessor:
         else:
             s = 30 # if the audio buffer is longer than 30s, trim it
         
-        if len(self.audio_buffer)/self.SAMPLING_RATE > s:
-            self.chunk_completed_segment(res)
+        # if len(self.audio_buffer)/self.SAMPLING_RATE > s:
+        #     self.chunk_completed_segment(res)
 
-            # alternative: on any word
-            #l = self.buffer_time_offset + len(self.audio_buffer)/self.SAMPLING_RATE - 10
-            # let's find commited word that is less
-            #k = len(self.commited)-1
-            #while k>0 and self.commited[k][1] > l:
-            #    k -= 1
-            #t = self.commited[k][1] 
-            print(f"chunking segment",file=self.logfile)
-            #self.chunk_at(t)
+        #     # alternative: on any word
+        #     #l = self.buffer_time_offset + len(self.audio_buffer)/self.SAMPLING_RATE - 10
+        #     # let's find commited word that is less
+        #     #k = len(self.commited)-1
+        #     #while k>0 and self.commited[k][1] > l:
+        #     #    k -= 1
+        #     #t = self.commited[k][1] 
+        #     print(f"chunking segment",file=self.logfile)
+        #     #self.chunk_at(t)
 
         print(f"len of buffer now: {len(self.audio_buffer)/self.SAMPLING_RATE:2.2f}",file=self.logfile)
-        return self.to_flush(o)
+        if len(self.audio_buffer)/self.SAMPLING_RATE > 30:
+            stop_speeking = True
 
-    def chunk_completed_sentence(self):
-        if self.commited == []: return
-        print(self.commited,file=self.logfile)
-        sents = self.words_to_sentences(self.commited)
-        for s in sents:
-            print("\t\tSENT:",s,file=self.logfile)
-        if len(sents) < 2:
-            return
-        while len(sents) > 2:
-            sents.pop(0)
-        # we will continue with audio processing at this timestamp
-        chunk_at = sents[-2][1]
+        return self.to_flush(o), stop_speeking
 
-        print(f"--- sentence chunked at {chunk_at:2.2f}",file=self.logfile)
-        self.chunk_at(chunk_at)
+
 
     def chunk_completed_segment(self, res):
         if self.commited == []: return
 
         ends = self.asr.segments_end_ts(res)
+        # print("ends:",ends,file=self.logfile)
+        # if self.commited == []: return
 
         t = self.commited[-1][1]
 
@@ -309,10 +310,6 @@ class OnlineASRProcessor:
         else:
             print(f"--- not enough segments to chunk",file=self.logfile)
 
-
-
-
-
     def chunk_at(self, time):
         """trims the hypothesis and audio buffer at "time"
         """
@@ -321,32 +318,6 @@ class OnlineASRProcessor:
         self.audio_buffer = self.audio_buffer[int(cut_seconds*self.SAMPLING_RATE):]
         self.buffer_time_offset = time
         self.last_chunked_at = time
-
-    def words_to_sentences(self, words):
-        """Uses self.tokenizer for sentence segmentation of words.
-        Returns: [(beg,end,"sentence 1"),...]
-        """
-        
-        cwords = [w for w in words]
-        t = " ".join(o[2] for o in cwords)
-        s = self.tokenizer.split(t)
-        out = []
-        while s:
-            beg = None
-            end = None
-            sent = s.pop(0).strip()
-            fsent = sent
-            while cwords:
-                b,e,w = cwords.pop(0)
-                w = w.strip()
-                if beg is None and sent.startswith(w):
-                    beg = b
-                elif end is None and sent == w:
-                    end = e
-                    out.append((beg,end,fsent))
-                    break
-                sent = sent[len(w):].strip()
-        return out
 
     def finish(self):
         """Flush the incomplete text when the whole processing ends.
@@ -372,6 +343,9 @@ class OnlineASRProcessor:
             b = offset + sents[0][0]
             e = offset + sents[-1][1]
         return (b,e,t)
+
+
+
 
 WHISPER_LANG_CODES = "af,am,ar,as,az,ba,be,bg,bn,bo,br,bs,ca,cs,cy,da,de,el,en,es,et,eu,fa,fi,fo,fr,gl,gu,ha,haw,he,hi,hr,ht,hu,hy,id,is,it,ja,jw,ka,kk,km,kn,ko,la,lb,ln,lo,lt,lv,mg,mi,mk,ml,mn,mr,ms,mt,my,ne,nl,nn,no,oc,pa,pl,ps,pt,ro,ru,sa,sd,si,sk,sl,sn,so,sq,sr,su,sv,sw,ta,te,tg,th,tk,tl,tr,tt,uk,ur,uz,vi,yi,yo,zh".split(",")
 
@@ -486,7 +460,8 @@ if __name__ == "__main__":
     asr.transcribe(a)
 
     beg = args.start_at
-    start = time.time()-beg
+    # start = time.time()-beg
+    start = time.time()
 
     def output_transcript(o, now=None):
         # output format in stdout is like:
@@ -561,17 +536,16 @@ if __name__ == "__main__":
             # online.insert_audio_chunk(a)
             
             try:
-                o = online.process_iter()
+                o, stop_speeking = online.process_iter()
             except AssertionError:
                 print("assertion error",file=logfile)
                 pass
-            else:
-                output_transcript(o)
-            now = time.time() - start
-            print(f"## last processed {end:.2f} s, now is {now:.2f}, the latency is {now-end:.2f}",file=logfile,flush=True)
-
-            if end >= duration:
-                break
+ 
+            # if end >= duration:
+            #     break
+            if stop_speeking:
+                print("online.commited:", [online.prompt()],file=logfile)
+                online.init()
         now = None
 
         o = online.finish()
