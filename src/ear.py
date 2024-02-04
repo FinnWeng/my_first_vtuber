@@ -176,7 +176,7 @@ class OnlineASRProcessor:
 
     # SAMPLING_RATE = 16000
 
-    def __init__(self, asr, tokenizer=None, buffer_trimming=("segment", 15), logfile=sys.stderr, sampling_rate = 16000, stop_speeking_count_limit=3, maximum_audio_buffer_size=10):
+    def __init__(self, asr, tokenizer=None, buffer_trimming=("segment", 15), logfile=sys.stderr, sampling_rate = 16000, stop_speeking_count_limit=3):
         """asr: WhisperASR object
         tokenizer: sentence tokenizer object for the target language. Must have a method *split* that behaves like the one of MosesTokenizer. It can be None, if "segment" buffer trimming option is used, then tokenizer is not used at all.
         ("segment", 15)
@@ -192,7 +192,7 @@ class OnlineASRProcessor:
         self.buffer_trimming_way, self.buffer_trimming_sec = buffer_trimming
         self.stop_speeking_count = 0
         self.stop_speeking_count_limit = stop_speeking_count_limit
-        self.maximum_audio_buffer_size = maximum_audio_buffer_size # in seconds
+
 
     def init(self):
         """run this when starting or restarting processing"""
@@ -288,8 +288,9 @@ class OnlineASRProcessor:
 
         print(f"len of buffer now: {len(self.audio_buffer)/self.SAMPLING_RATE:2.2f}",file=self.logfile)
         # print("self.audio_buffer:",self.audio_buffer.shape,file=self.logfile)
-        if len(self.audio_buffer)/self.SAMPLING_RATE > self.maximum_audio_buffer_size:
-            # self.audio_buffer = self.audio_buffer[-self.SAMPLING_RATE*self.maximum_audio_buffer_size:]
+        if len(self.audio_buffer)/self.SAMPLING_RATE > self.buffer_trimming_sec:
+            # self.transcript_buffer.pop_commited(time.time()-int(-self.SAMPLING_RATE*self.buffer_trimming_sec))
+            # self.audio_buffer = self.audio_buffer[int(-self.SAMPLING_RATE*self.buffer_trimming_sec):]
             stop_speeking = True
 
 
@@ -416,14 +417,13 @@ class Ear:
         model_dir = None
         self.min_chunk = 0.333
         self.stop_speeking_count_limit = 3
-        self.maximum_audio_buffer_size = 20 # in seconds
+        self.maximum_audio_buffer_size = 10 # in seconds
         self.sampling_rate = sampling_rate
         asr_cls = FasterWhisperASR
         asr = asr_cls(modelsize=size, lan=language, cache_dir=model_cache_dir, model_dir=model_dir)
         asr.use_vad()
-        self.online = OnlineASRProcessor(asr,tokenizer = None,logfile=sys.stderr,buffer_trimming=("segment", 15), \
-                                         sampling_rate = sampling_rate,stop_speeking_count_limit=self.stop_speeking_count_limit,\
-                                              maximum_audio_buffer_size=self.maximum_audio_buffer_size)
+        self.online = OnlineASRProcessor(asr,tokenizer = None,logfile=sys.stderr,buffer_trimming=("segment", self.maximum_audio_buffer_size), \
+                                         sampling_rate = sampling_rate,stop_speeking_count_limit=self.stop_speeking_count_limit)
         self.start = time.time()
         self.end = 0.0
 
@@ -442,15 +442,20 @@ class Ear:
 
     def process_iter(self):
         now = time.time() - self.start
+        o = None
+        stop_speeking = False
+
         if now < self.end+self.min_chunk:
-            time.sleep(self.min_chunk+self.end-now)
+            print("less than min_chunk")
+        else:
+            try:
+                o, stop_speeking = self.online.process_iter()
+            except AssertionError:
+                print("assertion error",file=sys.stderr)
+                pass
         self.end = time.time() - self.start
         
-        try:
-            o, stop_speeking = self.online.process_iter()
-        except AssertionError:
-            print("assertion error",file=sys.stderr)
-            pass
+
             
         return o, stop_speeking
     
