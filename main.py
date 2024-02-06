@@ -2,6 +2,7 @@ from src.llm_engine import LLM_Engine
 from src.ear import Ear
 import sounddevice as sd
 import time
+import soundfile
 
 
 
@@ -18,9 +19,13 @@ if __name__ == "__main__":
     #     print(response + "\n")
 
     ear = Ear()
-    with sd.InputStream(samplerate=ear.sampling_rate, blocksize = 8000, device=None,
-        dtype="float32", channels=1, callback=ear.hear_call_back):
+    # with sd.InputStream(samplerate=ear.sampling_rate, blocksize = 8000, device=None,
+    #     dtype="float32", channels=1, callback=ear.hear_call_back):
     
+    with sd.InputStream(samplerate=ear.sampling_rate, blocksize = 8000, device=None,
+        dtype="int16", channels=1, callback=ear.hear_call_back):
+    
+
         ear.start = time.time()
  
         while True:

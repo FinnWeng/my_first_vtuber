@@ -4,6 +4,9 @@ import numpy as np
 import librosa  
 from functools import lru_cache
 import time
+import soundfile
+import io
+
 
 
 
@@ -246,7 +249,10 @@ class OnlineASRProcessor:
         stop_speeking = False
         if (info[3] == self.latest_duration_after_vad) & (self.latest_duration_after_vad != 0.0):
             self.stop_speeking_count +=1
-            if self.stop_speeking_count > self.stop_speeking_count_limit:
+            '''
+            +1 to count first encounter
+            '''
+            if (self.stop_speeking_count+1) > self.stop_speeking_count_limit:
                 self.stop_speeking_count = 0
                 stop_speeking = True 
             
@@ -263,7 +269,8 @@ class OnlineASRProcessor:
         
         # print(">>>>COMPLETE NOW:",self.to_flush(o),file=self.logfile,flush=True)
         # print("INCOMPLETE:",self.to_flush(self.transcript_buffer.complete()),file=self.logfile,flush=True)
-        # print("info:",info[0],info[1],info[2],info[3],file=self.logfile,flush=True) # The info[3] is duration_after_vad. If two values of this value are the same, the speaker is stop talking.
+        # # print("info:",info[0],info[1],info[2],info[3],file=self.logfile,flush=True) # The info[3] is duration_after_vad. If two values of this value are the same, the speaker is stop talking.
+        # print("info:",info[3],file=self.logfile,flush=True) 
 
         # there is a newly confirmed text
 
@@ -288,7 +295,7 @@ class OnlineASRProcessor:
 
         print(f"len of buffer now: {len(self.audio_buffer)/self.SAMPLING_RATE:2.2f}",file=self.logfile)
         # print("self.audio_buffer:",self.audio_buffer.shape,file=self.logfile)
-        if len(self.audio_buffer)/self.SAMPLING_RATE > self.buffer_trimming_sec:
+        if len(self.audio_buffer) > self.buffer_trimming_sec*self.SAMPLING_RATE:
             # self.transcript_buffer.pop_commited(time.time()-int(-self.SAMPLING_RATE*self.buffer_trimming_sec))
             # self.audio_buffer = self.audio_buffer[int(-self.SAMPLING_RATE*self.buffer_trimming_sec):]
             stop_speeking = True
@@ -415,21 +422,21 @@ class Ear:
         language = "en"
         model_cache_dir = None
         model_dir = None
-        self.min_chunk = 0.333
-        self.stop_speeking_count_limit = 3
-        self.maximum_audio_buffer_size = 10 # in seconds
+        self.min_chunk = 0.5
+        self.stop_speeking_count_limit = 1
+        self.maximum_audio_buffer_size = 25 # in seconds
         self.sampling_rate = sampling_rate
         asr_cls = FasterWhisperASR
         asr = asr_cls(modelsize=size, lan=language, cache_dir=model_cache_dir, model_dir=model_dir)
         asr.use_vad()
         self.online = OnlineASRProcessor(asr,tokenizer = None,logfile=sys.stderr,buffer_trimming=("segment", self.maximum_audio_buffer_size), \
                                          sampling_rate = sampling_rate,stop_speeking_count_limit=self.stop_speeking_count_limit)
-        self.start = time.time()
-        self.end = 0.0
 
         # load the audio into the LRU cache before we start the timer
         a_short_clip = load_audio_chunk("./silence.wav",0,1)
         asr.transcribe(a_short_clip)
+
+        self.audio_out_tmp = []
 
 
     def hear_call_back(self, indata, frames, time, status):
@@ -438,25 +445,28 @@ class Ear:
             print(status, file=sys.stderr)
         # q.put(bytes(indata))
         # q.put(indata)
-        self.online.insert_audio_chunk(indata)
+        # self.online.insert_audio_chunk(indata)
+        sf = soundfile.SoundFile(io.BytesIO(indata), channels=1,endian="LITTLE",\
+                                 samplerate=self.sampling_rate, subtype="PCM_16",format="RAW")
+        audio, _ = librosa.load(sf,sr=self.sampling_rate)
+        self.audio_out_tmp.append(audio)
+        # self.online.insert_audio_chunk(audio)
 
     def process_iter(self):
-        now = time.time() - self.start
         o = None
         stop_speeking = False
-
-        if now < self.end+self.min_chunk:
-            print("less than min_chunk")
+        
+        if sum(len(x) for x in self.audio_out_tmp) < self.min_chunk*self.sampling_rate:
+            pass
         else:
+            self.online.insert_audio_chunk(np.concatenate(self.audio_out_tmp))
+            self.audio_out_tmp = []
             try:
                 o, stop_speeking = self.online.process_iter()
             except AssertionError:
                 print("assertion error",file=sys.stderr)
                 pass
-        self.end = time.time() - self.start
-        
 
-            
         return o, stop_speeking
     
     def reset_processor(self):
@@ -592,6 +602,8 @@ if __name__ == "__main__":
         # q.put(bytes(indata))
         # q.put(indata)
         online.insert_audio_chunk(indata)
+
+        soundfile.SoundFile(io.BytesIO(raw_bytes), channels=1,endian="LITTLE",samplerate=SAMPLING_RATE, subtype="PCM_16",format="RAW")
 
     end = 0
     with sd.InputStream(samplerate=16000, blocksize = 8000, device=None,
