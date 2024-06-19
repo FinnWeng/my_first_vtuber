@@ -1,6 +1,6 @@
 # My First Vtuber project
 
-https://github.com.FinnWeng/my_first_vtuber/resources/my_first_vtb_demo.mp4
+https://github.com/FinnWeng/my_first_vtuber/tree/target_add_mouth/resources/my_first_vtb_demo.mp4
 
 This repo is an attemp to build an AI vtuber by open source resource.
 
