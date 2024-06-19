@@ -1,6 +1,7 @@
 # My First Vtuber project
 
-https://github.com/FinnWeng/my_first_vtuber/tree/target_add_mouth/resources/my_first_vtb_demo.mp4
+
+https://github.com/FinnWeng/my_first_vtuber/assets/33126854/fdc00141-24ac-40ce-9f1f-e35b48baedc3
 
 This repo is an attemp to build an AI vtuber by open source resource.
 
@@ -9,6 +10,9 @@ This project is of course inspired by the famous AI vtuber Neuro-sama and her da
 But the infrastructure is 100% designed on my own.
 
 Below is a brief introduction of My First Vtuber
+
+
+
 
 
 # Design
